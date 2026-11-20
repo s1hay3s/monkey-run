@@ -164,6 +164,14 @@ kbd {
   #banner.pop { animation: banner-pop 0.4s ease-out; }
   @keyframes banner-pop { 0% { transform: translateX(-50%) scale(0.6); opacity: 0; } 60% { transform: translateX(-50%) scale(1.08); opacity: 1; } }
 }
+
+/* Christmas edition line under the title */
+.edition {
+  margin: 10px 0 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #c81f2c;
+}
 </style>
 </head>
 <body>
@@ -173,13 +181,14 @@ kbd {
 <div id="overlay">
   <div class="card">
     <h1>Monkey Run</h1>
+    <p id="edition" class="edition" hidden>🎄 Christmas Edition 🎄</p>
     <p id="result" class="result" hidden></p>
     <p id="startText" class="start">Loading the jungle…</p>
     <p class="controls">
       <kbd>←</kbd> <kbd>→</kbd> change lanes | <kbd>↑</kbd> jump | <kbd>↓</kbd> slide<br>
       On a phone or tablet, swipe instead.<br>
       Grab bananas for bonus points | <kbd>M</kbd> sound on/off<br>
-      Power-ups: 🧲 pulls in bananas | 🌿 swing over everything
+      Power-ups: 🧲 pulls in bananas | 🌿 swing over everything<span id="presentTip" hidden><br>🎁 Grab presents for 50 bonus points</span>
     </p>
     <p class="credit">Jungle models by Quaternius (CC0) | Monkey: our own design</p>
   </div>
@@ -196,6 +205,9 @@ const EMBEDDED_ASSETS = {"hero/monkey.glb":"Z2xURgIAAAD07hgAWD8AAEpTT057ImFzc2V0
 (() => {
 // ===== src/config.js =====
 // ---------- Tunable settings ----------
+// Christmas edition (Nov 2026): a snowy winter-wonderland jungle with decorations, presents, hats
+// and carols. Set to false after the holidays to get the normal green jungle back.
+const CHRISTMAS = true;
 const LANE_X = [-2.2, 0, 2.2];
 const START_SPEED = 14;       // units per second
 const MAX_SPEED = 28;
@@ -266,10 +278,10 @@ container.appendChild(renderer.domElement);
 const maxAniso = renderer.capabilities.getMaxAnisotropy();
 
 const scene = new THREE.Scene();
-const HORIZON = new THREE.Color(0xcdeeff);
+const HORIZON = new THREE.Color(CHRISTMAS ? 0xe6f0fa : 0xcdeeff);
 scene.background = HORIZON;
-// a soft green jungle haze swallows the far end of the trail
-scene.fog = new THREE.Fog(0xc4dfb4, 26, 105);
+// a soft haze swallows the far end of the trail: green in the jungle, snowy white at Christmas
+scene.fog = new THREE.Fog(CHRISTMAS ? 0xdfe9f2 : 0xc4dfb4, 26, 105);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 450);
 camera.position.set(0, 4.4, 7.5);
@@ -277,9 +289,10 @@ camera.lookAt(0, 1, -8);
 
 // ---------- Lighting: soft sky fill + warm sun that follows the player ----------
 // Generous sky light keeps the canopy's shade soft and bright; the sun adds warm dappled patches
-scene.add(new THREE.HemisphereLight(0xf2f8ff, 0x6a8a44, 0.85));
-scene.add(new THREE.AmbientLight(0xfff4e0, 0.16));
-const sun = new THREE.DirectionalLight(0xffe4b5, 0.8);   // warm late-morning sun
+// (at Christmas the light bounces off snow: a cool blue-white fill and a paler winter sun)
+scene.add(new THREE.HemisphereLight(CHRISTMAS ? 0xeef4ff : 0xf2f8ff, CHRISTMAS ? 0xb9c7d8 : 0x6a8a44, CHRISTMAS ? 0.68 : 0.85));
+scene.add(new THREE.AmbientLight(CHRISTMAS ? 0xeaf0ff : 0xfff4e0, CHRISTMAS ? 0.12 : 0.16));
+const sun = new THREE.DirectionalLight(CHRISTMAS ? 0xfff3e2 : 0xffe4b5, CHRISTMAS ? 0.6 : 0.8);   // late-morning sun
 sun.position.set(12, 24, 19);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);   // soft dappled light doesn't need more
@@ -299,10 +312,28 @@ const toonRamp = (() => {
   t.needsUpdate = true;
   return t;
 })();
-// Smooth, slightly glossy shading for the bright Subway Surfers look (no flat cartoon bands)
+// Christmas snow: surfaces facing up turn snowy white (snow-capped leaves, rocks, logs, branches).
+// Done in the shader from the world-space normal, so no models change.
+function addSnow(m, amount = 1) {
+  m.defines = Object.assign(m.defines || {}, { SNOW_AMOUNT: amount.toFixed(2) });
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSnowN;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSnowN = normalize(mat3(modelMatrix) * objectNormal);');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSnowN;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float snowK = smoothstep(0.2, 0.7, normalize(vSnowN).y) * SNOW_AMOUNT;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.98), snowK);`);
+  };
+}
+// Smooth, slightly glossy shading for the bright Subway Surfers look (no flat cartoon bands).
+// At Christmas, scenery gets snow on top unless it says noSnow (skinned animals never do).
 const toon = (color, extra = {}) => {
-  const { flatShading, ...rest } = extra;
-  return new THREE.MeshPhongMaterial(Object.assign({ color, shininess: 14, specular: 0x262626 }, rest));
+  const { flatShading, noSnow, ...rest } = extra;
+  const m = new THREE.MeshPhongMaterial(Object.assign({ color, shininess: 14, specular: 0x262626 }, rest));
+  if (CHRISTMAS && !noSnow && !rest.skinning) addSnow(m);
+  return m;
 };
 
 // Inked outlines: a slightly larger, inside-out copy drawn in dark brown
@@ -356,6 +387,73 @@ function wrapLeaf(ctx, s, x, y, len, color) {
     ctx.fill();
   }
 }
+// Christmas: a snowy trail. Packed, slightly blue-grey footpaths down the lanes with footprints and a
+// little earth showing through, soft snow drifts as lane dividers, and the edges fraying into fresh
+// snow. Same layout and size as the jungle trail below.
+function snowTrailTexture() {
+  return canvasTexture(1024, (ctx, s) => {
+    const W = 8.6;                                  // PATH_PLANE_W (defined just below)
+    const px = m => m / W * s, ux = x => (x / W + 0.5) * s;
+    ctx.fillStyle = '#e3eaf3';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 140; i++) wrapDot(ctx, s, rnd(0, s), rnd(0, s), rnd(20, 70), 'rgba(186,202,226,0.2)');
+    for (const lane of LANE_X) {                    // trampled lanes
+      const phase = rnd(0, 6);
+      for (let y = 0; y < s; y += 5) {
+        const x = ux(lane) + Math.sin(y / s * Math.PI * 4 + phase) * px(0.12);
+        wrapDot(ctx, s, x + rnd(-px(0.22), px(0.22)), y, rnd(px(0.28), px(0.46)), 'rgba(132,152,184,0.12)');
+      }
+      for (let i = 0; i < 70; i++) wrapDot(ctx, s, ux(lane) + rnd(-px(0.4), px(0.4)), rnd(0, s), rnd(4, 12), 'rgba(116,90,66,0.3)');
+      for (let i = 0; i < 26; i++) {                // footprints
+        const x = ux(lane) + rnd(-px(0.3), px(0.3)), y = rnd(0, s);
+        wrapLeaf(ctx, s, x, y, rnd(9, 13), 'rgba(150,168,194,0.35)');
+      }
+    }
+    for (let i = 0; i < 300; i++) wrapDot(ctx, s, rnd(0, s), rnd(0, s), rnd(1, 2.5), 'rgba(255,255,255,0.9)');   // sparkle
+    const dividerX = (LANE_X[1] - LANE_X[0]) / 2;   // soft drifts between the lanes
+    for (const dx of [-dividerX, dividerX]) {
+      for (let i = 0; i < 220; i++) {
+        const w = px(0.24) * (0.6 + 0.4 * Math.sin(i * 0.37));
+        const x = ux(dx) + rnd(-w, w), y = rnd(0, s);
+        wrapDot(ctx, s, x + 5, y + 4, rnd(9, 17), 'rgba(140,162,196,0.45)');   // shadow side
+        wrapDot(ctx, s, x, y, rnd(8, 16), 'rgba(255,255,255,0.95)');
+      }
+    }
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 200; i++) wrapDot(ctx, s, ux(side * rnd(3.0, 4.0)), rnd(0, s), rnd(8, 22), 'rgba(255,255,255,0.85)');
+    }
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(side < 0 ? 0 : ux(4.05), 0, px(W / 2 - 4.05), s);
+      for (let i = 0; i < 420; i++) {
+        const d = rnd(3.4, 4.1);
+        if (Math.random() > (d - 3.4) / 0.7) continue;
+        wrapDot(ctx, s, ux(side * d), rnd(0, s), rnd(6, 26), 'rgba(0,0,0,1)');
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }, 1, 2);
+}
+// Christmas: fresh snow on the jungle floor, with soft blue hollows and a few twigs poking through
+function snowFloorTexture() {
+  return canvasTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#f1f5fa';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 60; i++) wrapDot(ctx, s, rnd(0, s), rnd(0, s), rnd(12, 40), 'rgba(190,206,228,0.22)');
+    for (let i = 0; i < 40; i++) wrapDot(ctx, s, rnd(0, s), rnd(0, s), rnd(8, 26), 'rgba(255,255,255,0.6)');
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 40; i++) {
+      const x = rnd(4, s - 4), y = rnd(10, s - 4);
+      ctx.strokeStyle = Math.random() < 0.5 ? 'rgba(90,70,52,0.5)' : 'rgba(70,96,60,0.45)';
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + rnd(-6, 6), y - rnd(3, 8));
+      ctx.stroke();
+    }
+    for (let i = 0; i < 120; i++) wrapDot(ctx, s, rnd(0, s), rnd(0, s), rnd(0.8, 1.8), 'rgba(255,255,255,1)');
+  }, 20, 4);
+}
 // Worn jungle-floor trail. The dirt plane is wider than the lanes and its edges fray into the
 // jungle floor (cut out with alpha), so there's no straight road edge. Three trampled footpaths
 // mark the lanes, with uneven strips of moss and grass between them instead of painted lines.
@@ -364,7 +462,7 @@ const PATH_PLANE_W = 8.6;
 function wrapStroke(ctx, s, draw) {   // draw once, plus copies above and below so the tile wraps
   for (const dy of [-s, 0, s]) { ctx.save(); ctx.translate(0, dy); draw(); ctx.restore(); }
 }
-const pathTex = canvasTexture(1024, (ctx, s) => {
+const pathTex = CHRISTMAS ? snowTrailTexture() : canvasTexture(1024, (ctx, s) => {
   const px = m => m / PATH_PLANE_W * s;          // metres -> pixels
   const ux = x => (x / PATH_PLANE_W + 0.5) * s;  // trail x (metres) -> texture x
   ctx.fillStyle = '#946b45';                     // dark, damp earth
@@ -451,7 +549,7 @@ const pathTex = canvasTexture(1024, (ctx, s) => {
   ctx.globalCompositeOperation = 'source-over';
 }, 1, 2);
 // Jungle floor: deep greens, leaf litter and short grass strokes
-const grassTex = canvasTexture(256, (ctx, s) => {
+const grassTex = CHRISTMAS ? snowFloorTexture() : canvasTexture(256, (ctx, s) => {
   ctx.fillStyle = '#437f35';
   ctx.fillRect(0, 0, s, s);
   for (let i = 0; i < 50; i++) wrapDot(ctx, s, rnd(0, s), rnd(0, s), rnd(12, 42), 'rgba(24,62,26,0.22)');
@@ -471,10 +569,10 @@ const grassTex = canvasTexture(256, (ctx, s) => {
 
 // ---------- Materials ----------
 const mat = {
-  path:   toon(0xffffff, { map: pathTex, alphaTest: 0.5 }),
-  grass:  toon(0xffffff, { map: grassTex }),
-  grassShade: toon(0x7f9a74, { map: grassTex }),   // the same floor, darker, deep in the jungle
-  ground: toon(0x2f5a28),
+  path:   toon(0xffffff, { map: pathTex, alphaTest: 0.5, noSnow: true }),
+  grass:  toon(0xffffff, { map: grassTex, noSnow: true }),
+  grassShade: toon(CHRISTMAS ? 0xd3dbe6 : 0x7f9a74, { map: grassTex, noSnow: true }),   // the same floor, darker, deep in the jungle
+  ground: toon(CHRISTMAS ? 0xe4ebf3 : 0x2f5a28, { noSnow: true }),
   stone:  toon(0xa79e8c, { flatShading: true }),
   trunk:  toon(0x6a4a30),
   palmTrunk: toon(0x9b7448),
@@ -484,26 +582,26 @@ const mat = {
   leaves: [0x2f7d3a, 0x3f9a45, 0x4fae4a, 0x2a6b35, 0x62bd4c].map(c => toon(c, { flatShading: true })),
   canopy: [0x3e8a3a, 0x4b9a3f, 0x5aa845, 0x357a36].map(c => toon(c, { flatShading: true })),
   bough:  toon(0x6b4a2e),
-  petals: [0xff6fa8, 0xffd23f, 0xff8a3d, 0xc46bff, 0xffffff].map(c => toon(c)),
+  petals: [0xff6fa8, 0xffd23f, 0xff8a3d, 0xc46bff, 0xffffff].map(c => toon(c, { noSnow: true })),
   moss:   toon(0x5fae3e, { flatShading: true }),
-  player: toon(0xe39b3a),
-  hat:    toon(0x5a7d2a),
-  hatBand: toon(0x7a3f16),
-  pack:   toon(0xc8423a),
-  magnet: toon(0xe0402f, { emissive: 0x330000 }),
-  metal:  toon(0xdfe3e6),
-  vineItem: toon(0x3fae3a, { emissive: 0x0c2a0a }),
+  player: toon(0xe39b3a, { noSnow: true }),
+  hat:    toon(0x5a7d2a, { noSnow: true }),
+  hatBand: toon(0x7a3f16, { noSnow: true }),
+  pack:   toon(0xc8423a, { noSnow: true }),
+  magnet: toon(0xe0402f, { emissive: 0x330000, noSnow: true }),
+  metal:  toon(0xdfe3e6, { noSnow: true }),
+  vineItem: toon(0x3fae3a, { emissive: 0x0c2a0a, noSnow: true }),
   glow:   new THREE.MeshBasicMaterial({ color: 0xfff3a0, transparent: true, opacity: 0.45, depthWrite: false }),
-  playerHit: toon(0xe0413a),
+  playerHit: toon(0xe0413a, { noSnow: true }),
   log:    toon(0x6b3f1d),
   logEnd: toon(0xd9a86a),
   rock:   toon(0x9a9b90, { flatShading: true }),
-  face:   toon(0xf1cf9b),
+  face:   toon(0xf1cf9b, { noSnow: true }),
   eye:    new THREE.MeshBasicMaterial({ color: 0x1a1a1a }),
   shine:  new THREE.MeshBasicMaterial({ color: 0xffffff }),
-  banana: toon(0xffd93f, { emissive: 0x3a2a00 }),
-  cloud:  toon(0xffffff, { emissive: 0x7d8a99, fog: false }),
-  furs: [0x6b4226, 0x8a8a7e, 0xb07a2a, 0x3d2a1e].map(c => toon(c)),
+  banana: toon(0xffd93f, { emissive: 0x3a2a00, noSnow: true }),
+  cloud:  toon(0xffffff, { emissive: 0x7d8a99, fog: false, noSnow: true }),
+  furs: [0x6b4226, 0x8a8a7e, 0xb07a2a, 0x3d2a1e].map(c => toon(c, { noSnow: true })),
 };
 
 // ===== src/assets.js =====
@@ -657,7 +755,7 @@ const sky = new THREE.Mesh(
     depthWrite: false,
     fog: false,
     uniforms: {
-      top: { value: new THREE.Color(0x2e8ef0) },
+      top: { value: new THREE.Color(CHRISTMAS ? 0x7fb6e6 : 0x2e8ef0) },
       horizon: { value: HORIZON },
     },
     vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -738,7 +836,7 @@ function depthFor(material) {
 // which keeps dense scenery cheap to draw. Texture coordinates and vertex colors come along when
 // the material uses them. Only trees and canopy cast shadows; far scenery skips them.
 function bake(group, cast = true, receive = cast) {
-  const casts = m => cast && (!m.alphaTest || m.userData.castsShadow);
+  const casts = m => cast && !m.userData.noCast && (!m.alphaTest || m.userData.castsShadow);
   group.updateMatrixWorld(true);
   const buckets = new Map();
   group.traverse(o => {
@@ -860,8 +958,50 @@ function addFarTree(g, x, z, h) {
 function addBough(g, z) {
   const pts = [-10, -6, -2.5, 2.5, 6, 10].map(x =>
     new THREE.Vector3(x, canopyY(x) - 0.6 + rnd(-0.3, 0.3), z + rnd(-1.2, 1.2)));
-  const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 20, rnd(0.16, 0.24), 6), barkMat);
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, rnd(0.16, 0.24), 6), barkMat);
   g.add(tube);
+  if (CHRISTMAS) addLights(g, curve);
+}
+
+// ---------- Christmas decorations ----------
+// Strings of colored lights along the boughs (they twinkle: see twinkleLights), and shiny ornaments
+// hanging on strings from the canopy at the trail edges.
+const BULB_COLORS = [0xff3b3b, 0x3bd16f, 0xffd23f, 0x4aa8ff, 0xff8de0];
+const bulbMats = BULB_COLORS.map(c => new THREE.MeshBasicMaterial({ color: c }));
+const bulbGeo = new THREE.SphereGeometry(0.12, 8, 6);
+const wireMat = toon(0x24301f, { noSnow: true });
+const ORNAMENT_COLORS = [0xd8242f, 0xe8b630, 0xcfd6de, 0x2f6fd8, 0x2fa65a];
+const ornamentMats = ORNAMENT_COLORS.map(c => toon(c, { shininess: 90, specular: 0x999999, noSnow: true }));
+const ornamentGeo = new THREE.SphereGeometry(1, 14, 10);
+const capMat = toon(0xc9a23a, { shininess: 60, specular: 0x777777, noSnow: true });
+// decorations are too small to need shadows
+[...bulbMats, ...ornamentMats, capMat, wireMat].forEach(m => { m.userData.noCast = true; });
+function addLights(g, curve) {
+  // the wire hangs just under the bough, the bulbs dangle from it
+  const wirePts = curve.getPoints(30).map(p => p.clone().add(new THREE.Vector3(0, -0.28, 0)));
+  const wire = new THREE.CatmullRomCurve3(wirePts);
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(wire, 30, 0.02, 4), wireMat));
+  const n = 22;
+  for (let i = 1; i < n; i++) {
+    const p = wire.getPointAt(i / n);
+    put(g, bulbGeo, bulbMats[i % bulbMats.length], p.x, p.y - 0.09, p.z);
+  }
+}
+function addOrnament(g, x, z) {
+  const top = canopyY(x) - 0.2, len = rnd(1.4, 3.2), r = rnd(0.24, 0.34);
+  const string = put(g, vineGeo, wireMat, x, top - len / 2, z);
+  string.scale.set(0.35, len, 0.35);
+  const ball = put(g, ornamentGeo, pick(ornamentMats), x, top - len - r, z);
+  ball.scale.setScalar(r);
+  const cap = put(g, geoS.cyl, capMat, x, top - len + 0.02, z);
+  cap.scale.set(r * 0.32, 0.07, r * 0.32);
+}
+function twinkleLights(now) {
+  bulbMats.forEach((m, i) => {
+    const k = 0.55 + 0.45 * Math.max(0, Math.sin(now * 2.2 + i * 1.7));
+    m.color.setHex(BULB_COLORS[i]).multiplyScalar(k);
+  });
 }
 
 // A vine hanging from the canopy, with a few leaves along it
@@ -925,6 +1065,9 @@ function addCanopy(g) {
       if (Math.random() < gap) continue;
       addLeafClump(g, x + rnd(-0.5, 0.5), canopyY(x) + rnd(-0.1, 0.5), z + rnd(-0.6, 0.6));
     }
+  }
+  if (CHRISTMAS) for (const side of [-1, 1]) {   // ornaments at the trail edges, clear of the lanes
+    for (let i = 0; i < 5; i++) addOrnament(g, side * rnd(3.7, 5.5), -SEG_LEN / 2 + (i + rnd(0.1, 0.9)) * SEG_LEN / 5);
   }
   // vines: long ones at the path edges, short ones over the lanes (kept high, clear of the camera)
   for (const side of [-1, 1]) {
@@ -1209,7 +1352,7 @@ function updateParticles(dt, worldSpeed) {
 }
 function dustPuff(x, n, spread) {
   for (let i = 0; i < n; i++) {
-    emit(x + rnd(-0.3, 0.3), 0.15, rnd(0, 0.4), 0xd9b07a,
+    emit(x + rnd(-0.3, 0.3), 0.15, rnd(0, 0.4), CHRISTMAS ? 0xf4f8fd : 0xd9b07a,   // kicked-up snow at Christmas
       rnd(-spread, spread), rnd(0.4, 1), rnd(-0.5, 0.5), 0.45, 0.25, 1.0, 0.55);
   }
 }
@@ -1220,6 +1363,58 @@ function sparkle(pos) {
   }
 }
 let dustTimer = 0;
+
+// ---------- Christmas: falling snow ----------
+// Soft flakes in a box around the trail ahead of the camera, drifting down and sideways and
+// carried toward the player with the world; a flake that leaves the box wraps to the far side.
+const SNOW_BOX = { x: 22, y: 14, zNear: 9, zFar: -70 };
+let snowfall = null;
+if (CHRISTMAS) {
+  const N = IS_TOUCH ? 1400 : 2200;
+  const pos = new Float32Array(N * 3), drift = new Float32Array(N * 2);
+  for (let i = 0; i < N; i++) {
+    pos[i * 3] = rnd(-SNOW_BOX.x, SNOW_BOX.x);
+    pos[i * 3 + 1] = rnd(0, SNOW_BOX.y);
+    pos[i * 3 + 2] = rnd(SNOW_BOX.zFar, SNOW_BOX.zNear);
+    drift[i * 2] = rnd(0.9, 2.0);       // fall speed
+    drift[i * 2 + 1] = rnd(0, 6.3);     // sway phase
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const flake = (() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 32;
+    const ctx = c.getContext('2d');
+    const gr = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gr.addColorStop(0, 'rgba(255,255,255,1)');
+    gr.addColorStop(0.5, 'rgba(255,255,255,0.8)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gr;
+    ctx.fillRect(0, 0, 32, 32);
+    return new THREE.CanvasTexture(c);
+  })();
+  const pts = new THREE.Points(g, new THREE.PointsMaterial({
+    size: 0.22, map: flake, transparent: true, depthWrite: false, color: 0xffffff, sizeAttenuation: true,
+  }));
+  pts.frustumCulled = false;
+  scene.add(pts);
+  snowfall = { pts, pos, drift, N, t: 0 };
+}
+function updateSnow(dt, worldSpeed) {
+  if (!snowfall) return;
+  const { pos, drift, N } = snowfall;
+  snowfall.t += dt;
+  const t = snowfall.t, span = SNOW_BOX.zNear - SNOW_BOX.zFar;
+  for (let i = 0; i < N; i++) {
+    const k = i * 3;
+    pos[k] += Math.sin(t * 0.8 + drift[i * 2 + 1]) * 0.35 * dt;
+    pos[k + 1] -= drift[i * 2] * dt;
+    pos[k + 2] += worldSpeed * dt;
+    if (pos[k + 1] < 0) pos[k + 1] += SNOW_BOX.y;
+    if (pos[k + 2] > SNOW_BOX.zNear) pos[k + 2] -= span;
+  }
+  snowfall.pts.geometry.attributes.position.needsUpdate = true;
+}
 
 // ===== src/state.js =====
 // ---------- Player (monkey model is built further down, after the monkey builder) ----------
@@ -1343,6 +1538,58 @@ swingVine.position.set(-0.5, 1.47 + 15, 0);
 swingVine.visible = false;
 body.add(swingVine);
 
+// ---------- Christmas hats ----------
+// Built in the model's own units (r = about the head's radius) and attached to the head bone with
+// wearHat(), so they move with the head. tilt > 0 leans the tip toward +z (the back of the player's
+// head; the front of an obstacle animal's head, so they pass -1).
+const hatRed = toon(0xd61f2c, { noSnow: true, shininess: 20 });
+const hatWhite = toon(0xf4f1ea, { noSnow: true, shininess: 8 });
+const hatGreen = toon(0x2f9a3e, { noSnow: true, shininess: 20 });
+const hatGold = toon(0xe8b630, { noSnow: true, shininess: 80, specular: 0x777777 });
+function makeSantaHat(r) {
+  const g = new THREE.Group();
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(r, r * 2.1, 18), hatRed);
+  cone.position.y = r * 1.05;
+  g.add(cone);
+  const trim = new THREE.Mesh(new THREE.TorusGeometry(r * 1.0, r * 0.26, 8, 20), hatWhite);
+  trim.rotation.x = Math.PI / 2;
+  g.add(trim);
+  const pom = new THREE.Mesh(new THREE.SphereGeometry(r * 0.3, 10, 8), hatWhite);
+  pom.position.y = r * 2.15;
+  g.add(pom);
+  return g;
+}
+function makeElfHat(r) {
+  const g = new THREE.Group();
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(r * 0.9, r * 2.6, 16), hatGreen);
+  cone.position.y = r * 1.3;
+  g.add(cone);
+  const trim = new THREE.Mesh(new THREE.TorusGeometry(r * 0.9, r * 0.18, 8, 20), hatRed);
+  trim.rotation.x = Math.PI / 2;
+  g.add(trim);
+  const bell = new THREE.Mesh(new THREE.SphereGeometry(r * 0.22, 10, 8), hatGold);
+  bell.position.y = r * 2.65;
+  g.add(bell);
+  return g;
+}
+// rig: { holder, bones } in its rest pose; top: height above the head bone's joint (model units)
+function wearHat(rig, hat, top, tilt = 1, forward = 0, flop = 0) {
+  const head = rig.bones.Head;
+  let root = rig.holder;
+  while (root.parent) root = root.parent;
+  root.updateMatrixWorld(true);
+  const s = rig.holder.getWorldScale(new THREE.Vector3()).x;
+  const p = head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, top * s, forward * s));
+  const upright = new THREE.Group();   // undoes the head bone's own rotation, so the hat starts upright
+  head.add(upright);
+  upright.position.copy(head.worldToLocal(p));
+  upright.quaternion.copy(head.getWorldQuaternion(new THREE.Quaternion()).invert());
+  hat.rotation.set(0.3 * tilt, 0, flop);   // flop: lean the tip to one side
+  upright.add(hat);
+  hat.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return upright;
+}
+
 // ===== src/hero.js =====
 // ---------- The hero: our own monkey, built in Blender (blender/build_monkey.py), posed in code ----------
 let hero = null;
@@ -1436,6 +1683,8 @@ function loadHero() {
         holder.rotation.y = Math.PI;   // face down the track
         body.add(holder);
         hero = { holder, ...rigOf(root) };
+        // a Santa hat flopping forward and to the side, so from behind you see its red cone
+        if (CHRISTMAS) wearHat(hero, makeSantaHat(0.11), 0.18, -1.6, 0, 0.55);
         playerMonkey.visible = false;
         resolve();
       }, () => resolve());
@@ -1755,6 +2004,24 @@ const geo = {
 };
 const obstacles = [];
 
+// Christmas: the slide-under branch is striped like a candy cane
+const candyCaneMat = CHRISTMAS ? toon(0xffffff, {
+  noSnow: true, shininess: 50, specular: 0x555555,
+  map: (() => {
+    const t = canvasTexture(64, (ctx, s) => {
+      ctx.fillStyle = '#f7f3ee';
+      ctx.fillRect(0, 0, s, s);
+      ctx.fillStyle = '#d4202c';
+      for (let k = -1; k < 2; k++) {
+        ctx.beginPath();
+        ctx.moveTo(k * s, 0); ctx.lineTo(k * s + s / 2, 0); ctx.lineTo(k * s + s, s); ctx.lineTo(k * s + s / 2, s);
+        ctx.fill();
+      }
+    }, 3, 1);
+    return t;
+  })(),
+}) : null;
+
 // Vines from a hanging obstacle up to its own branch and leaf clump in the canopy, so it is
 // always tied to something overhead (geo.vine is 4 units long)
 const OBSTACLE_CANOPY_Y = canopyY(LANE_X[2]);
@@ -1778,14 +2045,59 @@ const powerups = [];
 
 // ---------- Bananas ----------
 const bananaGeo = new THREE.TorusGeometry(0.22, 0.08, 6, 12, Math.PI * 0.9);
+// Christmas: each banana wears a little red bow
+const bowMat = toon(0xd61f2c, { noSnow: true, shininess: 40 });
+const bowLoop = new THREE.TorusGeometry(0.07, 0.025, 6, 10);
+function addBow(parent, s, x, y, z) {
+  for (const side of [-1, 1]) {
+    const loop = new THREE.Mesh(bowLoop, bowMat);
+    loop.position.set(x + side * 0.065 * s, y, z);
+    loop.rotation.set(0, side * 0.5, side * 0.6);
+    loop.scale.setScalar(s);
+    parent.add(loop);
+  }
+  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.035 * s, 8, 6), bowMat);
+  knot.position.set(x, y, z);
+  parent.add(knot);
+}
+
 function spawnBanana(x, y, z) {
   const mesh = new THREE.Mesh(bananaGeo, mat.banana);
   mesh.position.set(x, y, z);
   mesh.rotation.z = 0.6;
   mesh.castShadow = true;
   addOutline(mesh, 1.12);
+  if (CHRISTMAS) addBow(mesh, 1, 0, 0.3, 0);
   scene.add(mesh);
   bananas.push({ mesh, x, y });
+}
+
+// Christmas: a wrapped present, a bonus pickup worth PRESENT_POINTS
+const PRESENT_POINTS = 50;
+const WRAP_COLORS = [0xd8242f, 0x2a9d4a, 0x2f6fd8, 0xe8b630, 0x8f3bd6];
+const wrapMats = WRAP_COLORS.map(c => toon(c, { noSnow: true, shininess: 40 }));
+const ribbonMat = toon(0xfff2c8, { noSnow: true, shininess: 60, specular: 0x666666 });
+function makePresent(size) {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(size, size * 0.85, size), pick(wrapMats));
+  box.castShadow = true;
+  g.add(box);
+  for (const r of [[size * 1.02, size * 0.87, size * 0.18], [size * 0.18, size * 0.87, size * 1.02]]) {
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(...r), ribbonMat));
+  }
+  for (const side of [-1, 1]) {
+    const loop = new THREE.Mesh(new THREE.TorusGeometry(size * 0.16, size * 0.05, 6, 10), ribbonMat);
+    loop.position.set(side * size * 0.14, size * 0.5, 0);
+    loop.rotation.set(0, Math.PI / 2, side * 0.6);
+    g.add(loop);
+  }
+  return g;
+}
+function spawnPresent(x, y, z) {
+  const mesh = makePresent(0.5);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
+  bananas.push({ mesh, x, y, present: true });
 }
 
 // ---------- Power-ups ----------
@@ -1849,7 +2161,7 @@ function buildObstacle(type) {
     return { mesh: g, halfW: 0.95, halfD: 0.32, yMin: 0, yMax: 0.62 };
   }
   if (type === 'branch') {
-    const bar = new THREE.Mesh(geo.branch, [mat.log, mat.logEnd, mat.logEnd]);
+    const bar = new THREE.Mesh(geo.branch, CHRISTMAS ? [candyCaneMat, mat.logEnd, mat.logEnd] : [mat.log, mat.logEnd, mat.logEnd]);
     bar.rotation.z = Math.PI / 2;
     bar.position.y = 1.1;
     bar.castShadow = true;
@@ -1866,6 +2178,7 @@ function buildObstacle(type) {
   if (type === 'runner' && hasAnimal('chimp')) {
     // a chimp: waves at you from far away, then gallops down the lane at you
     const a = makeAnimal('chimp', CHIMP_HEIGHT);
+    if (CHRISTMAS) wearHat(a, makeElfHat(0.1), 0.19, -1);
     g.add(a.holder);
     const phase = Math.random() * 6;
     return {
@@ -1878,6 +2191,7 @@ function buildObstacle(type) {
   }
   if ((type === 'gorilla' || type === 'switcher') && hasAnimal('gorilla')) {
     const a = makeAnimal('gorilla', GORILLA_HEIGHT);
+    if (CHRISTMAS) wearHat(a, makeSantaHat(0.15), 0.2, -1, -0.02);
     g.add(a.holder);
     const phase = Math.random() * 6;
     const o = { mesh: g, halfW: 0.85, halfD: 0.6, yMin: 0, yMax: 2.1 };
@@ -1949,6 +2263,7 @@ function buildObstacle(type) {
     pivot.position.y = HANG_BAR_Y;
     g.add(pivot);
     const a = makeAnimal('chimp', 2.3);   // dangles down to about knee height: slide under it
+    if (CHRISTMAS) wearHat(a, makeElfHat(0.1), 0.19, -1);
     a.holder.rotation.z = Math.PI;
     pivot.add(a.holder);
     const phase = Math.random() * 6;
@@ -2078,7 +2393,11 @@ function spawnRow(z) {
     if (state.distance > 120 && Math.random() < POWERUP_CHANCE) {
       spawnPowerup(Math.random() < 0.5 ? 'magnet' : 'swing', x, z - 4);
     } else if (Math.random() < 0.7) {
-      for (let k = 0; k < 4; k++) spawnBanana(x, 0.75, z - 2 - k * 2.2);
+      for (let k = 0; k < 4; k++) {
+        // at Christmas the end of some trails holds a present
+        if (CHRISTMAS && k === 3 && Math.random() < 0.3) spawnPresent(x, 0.75, z - 2 - k * 2.2);
+        else spawnBanana(x, 0.75, z - 2 - k * 2.2);
+      }
     }
   }
 }
@@ -2145,8 +2464,13 @@ function makeBoss() {
   const a = makeAnimal('gorilla', BOSS_HEIGHT);
   g.add(a.holder);
   scene.add(g);
-  // the crown rides on the head bone, placed upright on top of the head in the rest pose
+  // the crown (a Santa hat at Christmas) rides on the head bone, placed upright on top of the head
   g.updateMatrixWorld(true);
+  if (CHRISTMAS) {
+    wearHat(a, makeSantaHat(0.17), 0.22, -1, -0.02);
+    g.visible = false;
+    return { a, g };
+  }
   const head = a.bones.Head;
   const top = head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.3 * a.holder.scale.x, 0.01 * a.holder.scale.x));
   const crown = makeCrown();
@@ -2176,7 +2500,30 @@ function throwThing(type, lane) {
   const g = new THREE.Group();
   const x = LANE_X[lane];
   let o;
-  if (type === 'log') {
+  if (CHRISTMAS && type === 'log') {
+    // a big present tumbling end over end: jump it
+    const spin = new THREE.Group();
+    spin.position.y = 0.38;
+    const box = makePresent(0.72);
+    box.scale.set(2.2, 1, 1);   // wide enough to fill the lane
+    spin.add(box);
+    g.add(spin);
+    o = { halfW: 0.9, halfD: 0.38, yMin: 0, yMax: 0.76, roll: 0.5, spin };
+  } else if (CHRISTMAS) {
+    // a giant rolling snowball: too big to jump, change lanes
+    const spin = new THREE.Group();
+    spin.position.y = 1.0;
+    const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(1.0, 2), toon(0xf3f6fb, { noSnow: true, shininess: 10 }));
+    ball.castShadow = true;
+    spin.add(ball);
+    for (let i = 0; i < 6; i++) {   // lumps of packed snow
+      const lump = new THREE.Mesh(new THREE.IcosahedronGeometry(rnd(0.25, 0.4), 1), toon(0xe6edf6, { noSnow: true }));
+      lump.position.setFromSphericalCoords(0.85, rnd(0, Math.PI), rnd(0, Math.PI * 2));
+      spin.add(lump);
+    }
+    g.add(spin);
+    o = { halfW: 0.85, halfD: 0.9, yMin: 0, yMax: 2.0, roll: 1.0, spin };
+  } else if (type === 'log') {
     const log = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 1.7, 14), barkMat);
     log.rotation.z = Math.PI / 2;
     log.position.y = 0.38;
@@ -2343,10 +2690,129 @@ const sfx = {
   banana: () => { tone(880, 0.08, 'sine', 0.1); setTimeout(() => tone(1320, 0.1, 'sine', 0.1), 60); },
   crash: () => tone(170, 0.45, 'sawtooth', 0.12, 40),
   power: () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.12, 'triangle', 0.1), i * 70)),
+  present: () => [784, 988, 1175, 1568].forEach((f, i) => setTimeout(() => tone(f, 0.14, 'sine', 0.09), i * 60)),
   roar: () => { tone(95, 0.9, 'sawtooth', 0.14, 55); tone(142, 0.7, 'square', 0.05, 80); },
   throw: () => tone(520, 0.22, 'triangle', 0.08, 160),
   win: () => [523, 659, 784, 1047, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'triangle', 0.1), i * 110)),
 };
+
+// ===== src/music.js =====
+// ---------- Christmas background music (made in code, no files) ----------
+// Three traditional carols, all public domain, arranged here: a music-box bell melody over a soft
+// bass, with sleigh bells on the beat. Notes are scheduled a little ahead on the WebAudio clock so
+// timing stays steady. Starts with the first tap (browsers need a tap before sound); M mutes it.
+const MUSIC_VOLUME = 0.55;
+const SONGS = [
+  { // Jingle Bells (chorus), 4/4
+    name: 'Jingle Bells', beat: 0.33, perBar: 4,
+    chords: 'C C C C F C D G C C C C F C G C',
+    melody: 'E4 1 E4 1 E4 2 | E4 1 E4 1 E4 2 | E4 1 G4 1 C4 1.5 D4 .5 | E4 4 | ' +
+            'F4 1 F4 1 F4 1.5 F4 .5 | F4 1 E4 1 E4 1 E4 .5 E4 .5 | E4 1 D4 1 D4 1 E4 1 | D4 2 G4 2 | ' +
+            'E4 1 E4 1 E4 2 | E4 1 E4 1 E4 2 | E4 1 G4 1 C4 1.5 D4 .5 | E4 4 | ' +
+            'F4 1 F4 1 F4 1.5 F4 .5 | F4 1 E4 1 E4 1 E4 .5 E4 .5 | G4 1 G4 1 F4 1 D4 1 | C4 4',
+  },
+  { // Deck the Halls, 4/4
+    name: 'Deck the Halls', beat: 0.34, perBar: 4,
+    chords: 'C C G C C C G C G D D G C C F C',
+    melody: 'G4 1.5 F4 .5 E4 1 D4 1 | C4 1 D4 1 E4 1 C4 1 | D4 .5 E4 .5 F4 .5 D4 .5 E4 1.5 D4 .5 | C4 1 B3 1 C4 2 | ' +
+            'G4 1.5 F4 .5 E4 1 D4 1 | C4 1 D4 1 E4 1 C4 1 | D4 .5 E4 .5 F4 .5 D4 .5 E4 1.5 D4 .5 | C4 1 B3 1 C4 2 | ' +
+            'D4 1.5 E4 .5 F4 1 D4 1 | E4 1.5 F4 .5 G4 1 D4 1 | E4 .5 F#4 .5 G4 1 A4 .5 B4 .5 C5 1 | B4 1 A4 1 G4 2 | ' +
+            'G4 1.5 F4 .5 E4 1 D4 1 | C4 1 D4 1 E4 1 C4 1 | A4 .5 A4 .5 A4 .5 A4 .5 G4 1.5 F4 .5 | E4 1 D4 1 C4 2',
+  },
+  { // We Wish You a Merry Christmas, 3/4 (starts with a one-beat pickup)
+    name: 'We Wish You a Merry Christmas', beat: 0.36, perBar: 3,
+    chords: 'G G C A D B E D G',
+    melody: 'R 2 D4 1 | G4 1 G4 .5 A4 .5 G4 .5 F#4 .5 | E4 1 E4 1 E4 1 | A4 1 A4 .5 B4 .5 A4 .5 G4 .5 | ' +
+            'F#4 1 D4 1 D4 1 | B4 1 B4 .5 C5 .5 B4 .5 A4 .5 | G4 1 E4 1 D4 .5 D4 .5 | E4 1 A4 1 F#4 1 | G4 3',
+  },
+];
+
+const NOTE_INDEX = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
+const noteFreq = n => {
+  const m = n.match(/^([A-G]#?)(\d)$/);
+  return 440 * Math.pow(2, (NOTE_INDEX[m[1]] + (Number(m[2]) + 1) * 12 - 69) / 12);
+};
+const CHORD_ROOT = { C: 'C3', D: 'D3', E: 'E3', F: 'F3', G: 'G2', A: 'A2', B: 'B2' };
+
+let music = null;
+function startMusic() {
+  if (!CHRISTMAS || !audio || music) return;
+  const out = audio.createGain();
+  out.gain.value = muted ? 0 : MUSIC_VOLUME;
+  out.connect(audio.destination);
+  // a short burst of filtered noise makes the sleigh bells
+  const noise = audio.createBuffer(1, audio.sampleRate * 0.2, audio.sampleRate);
+  const d = noise.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  music = { out, noise, song: 0, next: audio.currentTime + 0.3 };
+  setInterval(scheduleMusic, 60);
+}
+
+function bell(freq, t, dur, vol) {
+  for (const [mult, type, v] of [[1, 'triangle', 1], [2, 'sine', 0.35], [3, 'sine', 0.12]]) {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type;
+    o.frequency.value = freq * mult;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol * v, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(0.35, dur * 1.6));
+    o.connect(g).connect(music.out);
+    o.start(t);
+    o.stop(t + Math.max(0.4, dur * 1.7));
+  }
+}
+function bass(freq, t, dur) {
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = 'triangle';
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.06, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur * 0.95);
+  o.connect(g).connect(music.out);
+  o.start(t);
+  o.stop(t + dur);
+}
+function sleighBell(t, vol) {
+  const src = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain();
+  src.buffer = music.noise;
+  f.type = 'bandpass';
+  f.frequency.value = 7500;
+  f.Q.value = 1.5;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+  src.connect(f).connect(g).connect(music.out);
+  src.start(t);
+  src.stop(t + 0.1);
+}
+
+// Queue a whole song once its start time is near; a short pause, then the next song
+function scheduleMusic() {
+  if (!music) return;
+  music.out.gain.value = muted ? 0 : MUSIC_VOLUME;
+  if (music.next - audio.currentTime > 0.5) return;
+  const song = SONGS[music.song];
+  const t0 = Math.max(music.next, audio.currentTime + 0.05);
+  const B = song.beat;
+  let t = t0;
+  const tokens = song.melody.replace(/\|/g, ' ').trim().split(/\s+/);
+  for (let i = 0; i < tokens.length; i += 2) {
+    const len = Number(tokens[i + 1]) * B;
+    if (tokens[i] !== 'R') bell(noteFreq(tokens[i]), t, len, 0.07);
+    t += len;
+  }
+  const chords = song.chords.split(' ');
+  chords.forEach((c, bar) => {
+    const root = noteFreq(CHORD_ROOT[c]);
+    for (let b = 0; b < song.perBar; b++) {
+      const bt = t0 + (bar * song.perBar + b) * B;
+      bass(b === 0 || b === 2 ? root : root * 1.5, bt, B);
+      sleighBell(bt, b === 0 ? 0.05 : 0.03);
+      sleighBell(bt + B / 2, 0.018);
+    }
+  });
+  music.next = t + 2 * B;   // a breath between songs
+  music.song = (music.song + 1) % SONGS.length;
+}
 
 // ===== src/main.js =====
 function readBest() {
@@ -2451,6 +2917,10 @@ const bananaEl = document.getElementById('bananas');
 const powerEl = document.getElementById('power');
 const resultEl = document.getElementById('result');
 const startEl = document.getElementById('startText');
+if (CHRISTMAS) {
+  document.getElementById('edition').hidden = false;
+  document.getElementById('presentTip').hidden = false;
+}
 
 function start() {
   if (!worldReady || state.running) return;
@@ -2464,6 +2934,7 @@ function start() {
     try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
   }
   if (audio && audio.state === 'suspended') audio.resume();
+  startMusic();
   state.running = true;
   overlay.classList.add('hidden');
 }
@@ -2575,7 +3046,12 @@ function update(dt) {
       scene.remove(b.mesh);
       bananas.splice(i, 1);
     }
-    if (grabbed) {
+    if (grabbed && b.present) {   // Christmas presents: bonus points
+      state.bonus += PRESENT_POINTS;
+      sparkle(b.mesh.position);
+      sfx.present();
+      bump(scoreEl);
+    } else if (grabbed) {
       state.bananas++;
       sparkle(b.mesh.position);
       sfx.banana();
@@ -2681,6 +3157,7 @@ function render() {
   const now = performance.now() / 1000;
   for (const o of obstacles) if (o.animate) o.animate(now, o.mesh.position.z);
   bossRender(now);
+  if (CHRISTMAS) twinkleLights(now);
   for (const p of powerups) {
     p.item.rotation.y = now * 2.5;
     p.item.position.y = 0.75 + Math.sin(now * 4) * 0.12;
@@ -2744,6 +3221,7 @@ function loop() {
   const dt = Math.min(raw, 0.05); // clamp so tab switches don’t jump
   if (state.running) update(dt);
   updateParticles(dt, state.running ? state.speed : 0);
+  updateSnow(dt, state.running ? state.speed : 0);
   if (state.shake > 0) state.shake = Math.max(0, state.shake - dt);
   render();
 }
